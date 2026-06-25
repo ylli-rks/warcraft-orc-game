@@ -173,35 +173,117 @@ const ENEMY_DEFS={
   darkArcher:{name:'Dark Archer',icon:'🕷️',hp:65,speed:.95,color:'#552255',size:8,attack:17,defense:1,range:4,atkSpeed:1700,reward:50}
 };
 
-// Optional pixel-art sprite sheets. The game still works without these files.
-// Put PNG sheets in these paths when you create them:
-// 4 rows: down, left, right, up. 14 columns: idle 0-1, walk 2-5, attack 6-9, death 10-13.
-const SPRITE_META={cols:14,rows:4,drawSize:34};
-const SPRITE_ROWS={down:0,left:1,right:2,up:3};
-const SPRITE_ANIMS={
-  idle:{start:0,count:2,ms:420},
-  walk:{start:2,count:4,ms:120},
-  attack:{start:6,count:4,ms:110},
-  death:{start:10,count:4,ms:180}
+// Optional game art assets. The game still works without these files.
+// Upload your JPEG files exactly in these paths:
+// assets/units/peon_idle.jpeg, assets/units/peon_walk.jpeg, assets/units/peon_work.jpeg, etc.
+// For unit sheets, this code expects a simple 4-direction grid when possible:
+// rows = down, left, right, up. If the image is a single pose, it will still draw it.
+const ASSET_UNIT_PATHS={
+  peon:{idle:'assets/units/peon_idle.jpeg',walk:'assets/units/peon_walk.jpeg',work:'assets/units/peon_work.jpeg',attack:'assets/units/peon_work.jpeg'},
+  grunt:{idle:'assets/units/grunt_idle.jpeg',walk:'assets/units/grunt_walk.jpeg',attack:'assets/units/grunt_attack.jpeg'},
+  archer:{idle:'assets/units/archer_idle.jpeg',walk:'assets/units/archer_walk.jpeg',attack:'assets/units/archer_attack.jpeg'},
+  shaman:{idle:'assets/units/shaman_idle.jpeg',walk:'assets/units/shaman_walk.jpeg',attack:'assets/units/shaman_cast.jpeg',cast:'assets/units/shaman_cast.jpeg'},
+  catapult:{idle:'assets/units/catapult_idle.jpeg',walk:'assets/units/catapult_walk.jpeg',attack:'assets/units/catapult_attack.jpeg'}
 };
-const UNIT_SPRITES={
-  peon:'assets/units/peon.png',
-  grunt:'assets/units/grunt.png',
-  archer:'assets/units/archer.png',
-  shaman:'assets/units/shaman.png',
-  catapult:'assets/units/catapult.png',
-  skeleton:'assets/units/skeleton.png',
-  troll:'assets/units/troll.png',
-  darkArcher:'assets/units/dark_archer.png'
+const ASSET_BUILDING_PATHS={
+  greatHall:'assets/buildings/great_hall.jpeg',
+  farm:'assets/buildings/farm.jpeg',
+  barracks:'assets/buildings/barracks.jpeg',
+  lumbermill:'assets/buildings/lumber_mill.jpeg',
+  tower:'assets/buildings/watch_tower.jpeg',
+  wall:'assets/buildings/wall.jpeg',
+  enemyHall:'assets/buildings/great_hall.jpeg',
+  enemyBarracks:'assets/buildings/barracks.jpeg',
+  enemyTower:'assets/buildings/watch_tower.jpeg'
 };
-const spriteImages={};
-for(const [type,src] of Object.entries(UNIT_SPRITES)){
+const ASSET_TILE_PATHS={
+  treeStages:'assets/tiles/tree_stages.jpeg',
+  goldMine:'assets/buildings/gold_mine.jpeg'
+};
+const assetImages={units:{},buildings:{},tiles:{}};
+function loadAsset(src){
   const img=new Image();
   img.ok=false;
   img.onload=()=>{img.ok=true;};
   img.onerror=()=>{img.ok=false;};
   img.src=src;
-  spriteImages[type]=img;
+  return img;
+}
+for(const [unit,states] of Object.entries(ASSET_UNIT_PATHS)){
+  assetImages.units[unit]={};
+  for(const [state,src] of Object.entries(states))assetImages.units[unit][state]=loadAsset(src);
+}
+for(const [type,src] of Object.entries(ASSET_BUILDING_PATHS))assetImages.buildings[type]=loadAsset(src);
+for(const [type,src] of Object.entries(ASSET_TILE_PATHS))assetImages.tiles[type]=loadAsset(src);
+
+const SPRITE_ROWS={down:0,left:1,right:2,up:3};
+function unitAnimKey(u){
+  if(u.state==='combat')return 'attack';
+  if(u.path&&u.path.length>0)return 'walk';
+  if(['gathering_wood','gathering_gold','building','building_move'].includes(u.state))return u.type==='peon'?'work':'attack';
+  return 'idle';
+}
+function drawSmartImage(img,sx,sy,drawW,drawH,opts={}){
+  if(!img||!img.ok||!img.complete||!img.naturalWidth)return false;
+  ctx.imageSmoothingEnabled=false;
+  const w=img.naturalWidth,h=img.naturalHeight;
+  const facing=opts.facing||'down';
+  const state=opts.state||'idle';
+  let rows=1,cols=1,row=0,col=0;
+  if(opts.directional){
+    rows=4;
+    row=SPRITE_ROWS[facing]??0;
+    const frameH=h/rows;
+    cols=Math.max(1,Math.round(w/frameH));
+    const speed=state==='walk'?140:(state==='attack'||state==='work'?120:450);
+    col=Math.floor((opts.timer||0)/speed)%cols;
+    ctx.drawImage(img,col*(w/cols),row*(h/rows),w/cols,h/rows,sx-drawW/2,sy-drawH+8,drawW,drawH);
+  }else{
+    ctx.drawImage(img,sx-drawW/2,sy-drawH+8,drawW,drawH);
+  }
+  ctx.imageSmoothingEnabled=true;
+  return true;
+}
+function drawUnitSprite(u,sx,sy){
+  const key=unitAnimKey(u);
+  const set=assetImages.units[u.type];
+  if(!set)return false;
+  const img=set[key]||set.attack||set.walk||set.idle;
+  const drawSize=u.type==='catapult'?48:38;
+  // Treat walking/attack/work files as directional sheets. Idle can be a one-pose image or a 4-direction strip.
+  const directional=key!=='idle' || (img&&img.ok&&img.naturalHeight>img.naturalWidth*1.5);
+  return drawSmartImage(img,sx,sy,drawSize,drawSize,{directional,facing:u.facing||'down',state:key,timer:u.animTimer||0});
+}
+function drawBuildingSprite(b,sx,sy){
+  const img=assetImages.buildings[b.type];
+  if(!img||!img.ok||!img.complete||!img.naturalWidth)return false;
+  ctx.imageSmoothingEnabled=false;
+  ctx.drawImage(img,sx,sy,b.size,b.size);
+  ctx.imageSmoothingEnabled=true;
+  return true;
+}
+function drawTreeSprite(tile,sx,sy){
+  const img=assetImages.tiles.treeStages;
+  if(!img||!img.ok||!img.complete||!img.naturalWidth)return false;
+  let stage=0;
+  const r=tile.resource??110;
+  if(r<35)stage=2;else if(r<80)stage=1;
+  const cols=3;
+  const fw=img.naturalWidth/cols,fh=img.naturalHeight;
+  ctx.imageSmoothingEnabled=false;
+  ctx.drawImage(img,stage*fw,0,fw,fh,sx-2,sy-9,TILE+4,TILE+12);
+  ctx.imageSmoothingEnabled=true;
+  return true;
+}
+function drawGoldMineSprite(tx,ty,sx,sy){
+  const img=assetImages.tiles.goldMine;
+  if(!img||!img.ok||!img.complete||!img.naturalWidth)return false;
+  const mine=getMineAt(tx,ty);
+  if(!mine||mine.tx!==tx||mine.ty!==ty)return false;
+  ctx.imageSmoothingEnabled=false;
+  ctx.drawImage(img,sx,sy,TILE*3,TILE*3);
+  ctx.imageSmoothingEnabled=true;
+  return true;
 }
 
 const TRAINABLE=['grunt','archer','shaman','catapult'];
@@ -214,6 +296,7 @@ function isFighter(u){return u&&u.kind==='unit'&&u.team==='player'&&UNIT_DEFS[u.
 function isWorker(u){return u&&u.kind==='unit'&&u.team==='player'&&u.type==='peon';}
 function buildingTiles(def){return Math.ceil(def.size/TILE);}
 function tileIsVisible(tx,ty){return !!map[ty]?.[tx]&&!fog[ty][tx];}
+function tileIsExplored(tx,ty){return !!map[ty]?.[tx]&&!!explored[ty]?.[tx];}
 function setFacingFromVector(u,dx,dy){
   if(!u||(!dx&&!dy))return;
   if(Math.abs(dx)>Math.abs(dy))u.facing=dx>=0?'right':'left';
@@ -351,7 +434,7 @@ function heuristic(ax,ay,bx,by){return Math.abs(ax-bx)+Math.abs(ay-by);}
 function findPath(sx,sy,ex,ey,maxIter=1400,avoidFog=false){
   sx=clamp(sx,0,MAP_W-1);sy=clamp(sy,0,MAP_H-1);ex=clamp(ex,0,MAP_W-1);ey=clamp(ey,0,MAP_H-1);
   if(!map[ey]?.[ex])return [];
-  if(avoidFog&&fog[ey]?.[ex])return [];
+  if(avoidFog&&!explored[ey]?.[ex])return [];
   const key=(x,y)=>y*MAP_W+x;
   const open=[{x:sx,y:sy,g:0,h:heuristic(sx,sy,ex,ey),p:null}];
   const closed=new Set();let iter=0;
@@ -365,7 +448,7 @@ function findPath(sx,sy,ex,ey,maxIter=1400,avoidFog=false){
       const nx=cur.x+dx,ny=cur.y+dy;
       if(nx<0||ny<0||nx>=MAP_W||ny>=MAP_H||closed.has(key(nx,ny)))continue;
       const tile=map[ny][nx];
-      if(avoidFog&&fog[ny]?.[nx])continue;
+      if(avoidFog&&!explored[ny]?.[nx])continue;
       if(!tile.walkable&&!(nx===ex&&ny===ey))continue;
       const g=cur.g+c;
       const old=open.find(n=>n.x===nx&&n.y===ny);
@@ -415,14 +498,14 @@ function orderGatherWood(u,tx,ty,avoidFog=false){
   const tile=map[ty]?.[tx];
   if(!tile||tile.type!==T.TREE){const n=nearestTree(tx,ty);if(n){tx=n.tx;ty=n.ty;}else return false;}
   const adj=bestAdjacent(u,tx,ty,1);if(!adj)return false;
-  if(avoidFog&&fog[ty]?.[tx])return false;
+  if(avoidFog&&!explored[ty]?.[tx])return false;
   clearUnitJob(u,false);u.targetEntity={tx,ty};u.state='going_wood';u.gatherTimer=0;setUnitPath(u,adj.x,adj.y,avoidFog);return true;
 }
 
 function orderGatherGold(u,mine,avoidFog=false){
   if(!mine||mine.resource<=0)return false;
   const adj=bestAdjacent(u,mine.tx,mine.ty,mine.size);if(!adj)return false;
-  if(avoidFog&&fog[mine.ty]?.[mine.tx])return false;
+  if(avoidFog&&!explored[mine.ty]?.[mine.tx])return false;
   clearUnitJob(u,false);u.targetMineId=mine.id;u.state='going_gold';u.gatherTimer=0;setUnitPath(u,adj.x,adj.y,avoidFog);return true;
 }
 
@@ -717,8 +800,8 @@ function renderTile(x,y){
   if(fog[y][x]&&!explored[y][x])return;
   ctx.globalAlpha=fog[y][x]&&explored[y][x]?.valueOf()?.valueOf()?0.42:1;
   ctx.fillStyle=TILE_COLORS[tile.type]||'#2d5a1b';ctx.fillRect(sx,sy,TILE,TILE);
-  if(tile.type===T.TREE){ctx.fillStyle='#0d3008';ctx.beginPath();ctx.arc(sx+c,sy+c,TILE*.34,0,Math.PI*2);ctx.fill();ctx.fillStyle='#1a5a12';ctx.beginPath();ctx.arc(sx+c,sy+c-TILE*.09,TILE*.27,0,Math.PI*2);ctx.fill();}
-  if(tile.type===T.GOLD){ctx.fillStyle='#dba614';ctx.fillRect(sx+2,sy+2,TILE-4,TILE-4);ctx.fillStyle='#ffd700';ctx.font=`${Math.max(10,Math.round(TILE*.7))}px serif`;ctx.textAlign='center';ctx.fillText('◆',sx+c,sy+c+TILE*.22);}
+  if(tile.type===T.TREE){if(!drawTreeSprite(tile,sx,sy)){ctx.fillStyle='#0d3008';ctx.beginPath();ctx.arc(sx+c,sy+c,TILE*.34,0,Math.PI*2);ctx.fill();ctx.fillStyle='#1a5a12';ctx.beginPath();ctx.arc(sx+c,sy+c-TILE*.09,TILE*.27,0,Math.PI*2);ctx.fill();}}
+  if(tile.type===T.GOLD){if(!drawGoldMineSprite(x,y,sx,sy)){ctx.fillStyle='#dba614';ctx.fillRect(sx+2,sy+2,TILE-4,TILE-4);ctx.fillStyle='#ffd700';ctx.font=`${Math.max(10,Math.round(TILE*.7))}px serif`;ctx.textAlign='center';ctx.fillText('◆',sx+c,sy+c+TILE*.22);}}
   if(tile.type===T.WALL){ctx.fillStyle='#777';ctx.fillRect(sx+1,sy+1,TILE-2,TILE-2);}
   ctx.strokeStyle='rgba(0,0,0,.11)';ctx.lineWidth=1;ctx.strokeRect(sx,sy,TILE,TILE);ctx.globalAlpha=1;
 }
@@ -730,9 +813,9 @@ function renderBuildings(){
     const cx=e.tx+Math.floor(e.size/TILE/2),cy=e.ty+Math.floor(e.size/TILE/2);if(fog[cy]?.[cx]&&!explored[cy]?.[cx])continue;
     const isSel=selected.includes(e);ctx.globalAlpha=fog[cy]?.[cx]&&explored[cy]?.[cx]?.valueOf()?0.52:1;
     ctx.fillStyle='rgba(0,0,0,.38)';ctx.fillRect(sx+4,sy+4,e.size,e.size);
-    ctx.fillStyle=e.underConstruction?'#4a3a23':e.color;ctx.fillRect(sx,sy,e.size,e.size);
+    if(!drawBuildingSprite(e,sx,sy)){ctx.fillStyle=e.underConstruction?'#4a3a23':e.color;ctx.fillRect(sx,sy,e.size,e.size);}
     ctx.strokeStyle=e.team==='player'?(isSel?'#00ff00':'#8b6914'):'#ff4444';ctx.lineWidth=isSel?2:1;ctx.strokeRect(sx,sy,e.size,e.size);
-    ctx.font=`${Math.round(e.size*.42)}px serif`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(e.icon,sx+e.size/2,sy+e.size/2);
+    if(!(assetImages.buildings[e.type]?.ok)){ctx.font=`${Math.round(e.size*.42)}px serif`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(e.icon,sx+e.size/2,sy+e.size/2);}
     const hp=Math.max(0,e.hp/e.maxHp);ctx.fillStyle='#000';ctx.fillRect(sx,sy-7,e.size,5);ctx.fillStyle=hp>.6?'#22cc22':hp>.3?'#ccaa00':'#cc2222';ctx.fillRect(sx,sy-7,e.size*hp,5);
     ctx.fillStyle='#e8d5a0';ctx.font='9px Courier New';ctx.fillText(e.name,sx+e.size/2,sy+e.size+10);
     if(e.underConstruction){const p=e.buildProgress/e.buildTime;ctx.fillStyle='rgba(0,0,0,.65)';ctx.fillRect(sx,sy+e.size-9,e.size,9);ctx.fillStyle='#d6a647';ctx.fillRect(sx,sy+e.size-9,e.size*p,9);ctx.fillStyle='#fff';ctx.font='8px Courier New';ctx.fillText(`${Math.round(p*100)}%`,sx+e.size/2,sy+e.size-1);}
@@ -746,7 +829,7 @@ function renderUnits(){
   for(const e of entities){
     if(e.kind!=='unit'||e.garrisoned||e.insideMine)continue;
     const sx=e.x-CAM_X,sy=e.y-CAM_Y;if(sx<-35||sy<-45||sx>SCREEN_W+35||sy>SCREEN_H+35)continue;
-    const ftx=Math.floor(e.x/TILE),fty=Math.floor(e.y/TILE);if(fog[fty]?.[ftx]&&!explored[fty]?.[ftx])continue;
+    const ftx=Math.floor(e.x/TILE),fty=Math.floor(e.y/TILE);if(e.team==='enemy'&&fog[fty]?.[ftx])continue;if(fog[fty]?.[ftx]&&!explored[fty]?.[ftx])continue;
     const bob=(e.path&&e.path.length)?Math.sin(e.animTimer/90)*1.6:Math.sin(e.animTimer/450)*.5;
     const shake=e.state==='combat'?Math.sin(e.animTimer/55)*1.3:0;
     const isSel=selected.includes(e);
@@ -781,7 +864,7 @@ function renderBuildPreview(){
 function renderMinimap(){
   const mw=minimap.width,mh=minimap.height,sx=mw/(MAP_W*TILE),sy=mh/(MAP_H*TILE);mctx.fillStyle='#000';mctx.fillRect(0,0,mw,mh);
   for(let y=0;y<MAP_H;y++)for(let x=0;x<MAP_W;x++){if(!explored[y][x])continue;mctx.fillStyle=fog[y][x]?'#222':TILE_COLORS[map[y][x].type]||'#2d5a1b';mctx.fillRect(x*TILE*sx,y*TILE*sy,TILE*sx+1,TILE*sy+1);}
-  for(const e of entities){if(e.garrisoned||e.insideMine)continue;const ex=e.kind==='building'?e.x+e.size/2:e.x,ey=e.kind==='building'?e.y+e.size/2:e.y;const tx=Math.floor(ex/TILE),ty=Math.floor(ey/TILE);if(!explored[ty]?.[tx])continue;mctx.fillStyle=e.team==='enemy'?'#ff4444':(e.kind==='building'?'#ff8800':'#00cc00');mctx.fillRect(ex*sx-2,ey*sy-2,4,4);}
+  for(const e of entities){if(e.garrisoned||e.insideMine)continue;const ex=e.kind==='building'?e.x+e.size/2:e.x,ey=e.kind==='building'?e.y+e.size/2:e.y;const tx=Math.floor(ex/TILE),ty=Math.floor(ey/TILE);if(!explored[ty]?.[tx])continue;if(e.team==='enemy'&&fog[ty]?.[tx])continue;mctx.fillStyle=e.team==='enemy'?'#ff4444':(e.kind==='building'?'#ff8800':'#00cc00');mctx.fillRect(ex*sx-2,ey*sy-2,4,4);}
   mctx.strokeStyle='#fff';mctx.lineWidth=1;mctx.strokeRect(CAM_X*sx,CAM_Y*sy,SCREEN_W*sx,SCREEN_H*sy);
 }
 
@@ -842,7 +925,7 @@ function doAction(action){
 function canPlaceBuilding(type,tx,ty){
   const def=BUILDING_DEFS[type];if(!def)return {ok:false,reason:'Unknown building.'};const s=buildingTiles(def);
   if(tx<0||ty<0||tx+s>=MAP_W||ty+s>=MAP_H)return {ok:false,reason:'Outside map.'};
-  for(let dy=0;dy<s;dy++)for(let dx=0;dx<s;dx++){const tile=map[ty+dy]?.[tx+dx];if(!tile||!tile.walkable)return {ok:false,reason:'Blocked.'};if(fog[ty+dy][tx+dx])return {ok:false,reason:'Cannot build in fog.'};}
+  for(let dy=0;dy<s;dy++)for(let dx=0;dx<s;dx++){const tile=map[ty+dy]?.[tx+dx];if(!tile||!tile.walkable)return {ok:false,reason:'Blocked.'};if(!explored[ty+dy]?.[tx+dx])return {ok:false,reason:'Cannot build in unexplored area.'};}
   for(const e of entities){if(e.kind==='unit'&&!e.garrisoned&&!e.insideMine){const ux=Math.floor(e.x/TILE),uy=Math.floor(e.y/TILE);if(ux>=tx&&ux<tx+s&&uy>=ty&&uy<ty+s)return {ok:false,reason:'Unit in way.'};}}
   return {ok:true,reason:''};
 }
@@ -850,7 +933,7 @@ function canPlaceBuilding(type,tx,ty){
 function handlePendingAction(tx,ty,wx,wy){
   if(!pendingAction)return false;
   const units=selected.filter(e=>e.kind==='unit'&&e.team==='player');
-  if(['move','gather_gold','gather_wood','build'].includes(pendingAction.type)&&fog[ty]?.[tx]){showNotification('Cannot command units into fog.',1300);return true;}
+  if(['move','gather_gold','gather_wood','build'].includes(pendingAction.type)&&!explored[ty]?.[tx]){showNotification('Cannot command units into unexplored black fog.',1300);return true;}
   if(pendingAction.type==='move'){moveUnits(units,tx,ty);pendingAction=null;return true;}
   if(pendingAction.type==='gather_gold'){const mine=getMineAt(tx,ty);if(!mine){showNotification('Click a gold mine.',1200);return true;}selected.filter(isWorker).forEach(u=>orderGatherGold(u,mine,true));pendingAction=null;setMessage('Workers sent to gold mine. Mine capacity is 5.');markUI();return true;}
   if(pendingAction.type==='gather_wood'){const tile=map[ty]?.[tx];if(!tile||tile.type!==T.TREE){showNotification('Click a tree.',1200);return true;}selected.filter(isWorker).forEach(u=>orderGatherWood(u,tx,ty,true));pendingAction=null;setMessage('Workers sent to chop wood.');markUI();return true;}
@@ -872,20 +955,20 @@ function handleRightClick(tx,ty,wx,wy){
   const clicked=getEntityAt(wx,wy);
   if(clicked&&clicked.team==='enemy'){units.forEach(u=>{clearUnitJob(u);u.combatTarget=clicked;u.state='combat';setFacingFromVector(u,(clicked.x||0)-u.x,(clicked.y||0)-u.y);});setMessage('Attacking.');markUI();return;}
   if(clicked&&clicked.type==='tower'&&clicked.team==='player'){units.filter(isFighter).forEach(u=>garrisonUnit(u,clicked));setMessage('Fighters entered tower.');return;}
-  if(fog[ty]?.[tx]){showNotification('Cannot command units into fog.',1300);return;}
+  if(!explored[ty]?.[tx]){showNotification('Cannot command units into unexplored black fog.',1300);return;}
   const mine=getMineAt(tx,ty);if(mine){units.filter(isWorker).forEach(u=>orderGatherGold(u,mine,true));setMessage('Workers sent to gold mine.');return;}
   if(map[ty]?.[tx]?.type===T.TREE){units.filter(isWorker).forEach(u=>orderGatherWood(u,tx,ty,true));setMessage('Workers sent to chop wood.');return;}
   moveUnits(units,tx,ty);
 }
 
 function moveUnits(units,tx,ty){
-  if(fog[ty]?.[tx]){showNotification('Cannot move into fog.',1300);return;}
+  if(!explored[ty]?.[tx]){showNotification('Cannot move into unexplored black fog.',1300);return;}
   const offsets=[[0,0],[1,0],[-1,0],[0,1],[0,-1],[1,1],[-1,1],[1,-1],[-1,-1],[2,0],[-2,0],[0,2],[0,-2]];
   let issued=0;
   units.forEach((u,i)=>{
     let [ox,oy]=offsets[i%offsets.length];let x=tx+ox,y=ty+oy;
-    if(!map[y]?.[x]?.walkable||fog[y]?.[x]){
-      const adj=getAdjacent(tx,ty,1).filter(p=>!fog[p.y]?.[p.x]);
+    if(!map[y]?.[x]?.walkable||!explored[y]?.[x]){
+      const adj=getAdjacent(tx,ty,1).filter(p=>explored[p.y]?.[p.x]);
       if(adj.length){x=adj[0].x;y=adj[0].y;}else return;
     }
     clearUnitJob(u);u.state='moving';
