@@ -302,27 +302,6 @@ function setFacingFromVector(u,dx,dy){
   if(Math.abs(dx)>Math.abs(dy))u.facing=dx>=0?'right':'left';
   else u.facing=dy>=0?'down':'up';
 }
-function unitAnimName(u){
-  if(u.state==='combat')return 'attack';
-  if(u.path&&u.path.length>0)return 'walk';
-  if(['gathering_wood','gathering_gold','building'].includes(u.state))return 'attack';
-  return 'idle';
-}
-function drawUnitSprite(u,sx,sy){
-  const img=spriteImages[u.type];
-  if(!img||!img.ok||!img.complete||!img.naturalWidth)return false;
-  const anim=SPRITE_ANIMS[unitAnimName(u)]||SPRITE_ANIMS.idle;
-  const frameW=img.naturalWidth/SPRITE_META.cols;
-  const frameH=img.naturalHeight/SPRITE_META.rows;
-  const row=SPRITE_ROWS[u.facing||'down']??0;
-  const frame=anim.start+(Math.floor((u.animTimer||0)/anim.ms)%anim.count);
-  const drawSize=u.type==='catapult'?44:SPRITE_META.drawSize;
-  ctx.imageSmoothingEnabled=false;
-  ctx.drawImage(img,frame*frameW,row*frameH,frameW,frameH,sx-drawSize/2,sy-drawSize+8,drawSize,drawSize);
-  ctx.imageSmoothingEnabled=true;
-  return true;
-}
-
 function getUnitDef(type,team='player'){
   const base=UNIT_DEFS[type]||ENEMY_DEFS[type];
   const d=clone(base);
