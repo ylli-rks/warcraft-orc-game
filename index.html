@@ -217,30 +217,99 @@ for(const [type,src] of Object.entries(ASSET_BUILDING_PATHS))assetImages.buildin
 for(const [type,src] of Object.entries(ASSET_TILE_PATHS))assetImages.tiles[type]=loadAsset(src);
 
 const SPRITE_ROWS={down:0,left:1,right:2,up:3};
+const UNIT_SHEET_CONFIG={
+  // Your current Nanobanana sheets from the screenshots.
+  // rows = direction rows, cols = animation frames per row.
+  peon:{
+    idle:{rows:2,cols:4,still:true,preferredCol:0,preferredRow:0},
+    walk:{rows:4,cols:4},
+    work:{rows:4,cols:4},
+    attack:{rows:4,cols:4}
+  },
+  grunt:{
+    idle:{rows:2,cols:2,still:true,preferredCol:0,preferredRow:0},
+    walk:{rows:4,cols:4},
+    attack:{rows:4,cols:6}
+  },
+  archer:{
+    idle:{rows:2,cols:2,still:true,preferredCol:0,preferredRow:0},
+    walk:{rows:4,cols:4},
+    attack:{rows:4,cols:4}
+  },
+  shaman:{
+    idle:{rows:2,cols:2,still:true,preferredCol:0,preferredRow:0},
+    walk:{rows:4,cols:6},
+    attack:{rows:4,cols:4},
+    cast:{rows:4,cols:4}
+  },
+  catapult:{
+    idle:{rows:1,cols:1,still:true},
+    walk:{rows:1,cols:1,still:true},
+    attack:{rows:1,cols:1,still:true}
+  }
+};
+const frameCanvasCache=new WeakMap();
 function unitAnimKey(u){
-  if(u.state==='combat')return 'attack';
+  if(u.state==='combat')return u.type==='shaman'?'cast':'attack';
   if(u.path&&u.path.length>0)return 'walk';
   if(['gathering_wood','gathering_gold','building','building_move'].includes(u.state))return u.type==='peon'?'work':'attack';
   return 'idle';
 }
-function drawSmartImage(img,sx,sy,drawW,drawH,opts={}){
-  if(!img||!img.ok||!img.complete||!img.naturalWidth)return false;
-  ctx.imageSmoothingEnabled=false;
-  const w=img.naturalWidth,h=img.naturalHeight;
-  const facing=opts.facing||'down';
-  const state=opts.state||'idle';
-  let rows=1,cols=1,row=0,col=0;
-  if(opts.directional){
-    rows=4;
-    row=SPRITE_ROWS[facing]??0;
-    const frameH=h/rows;
-    cols=Math.max(1,Math.round(w/frameH));
-    const speed=state==='walk'?140:(state==='attack'||state==='work'?120:450);
-    col=Math.floor((opts.timer||0)/speed)%cols;
-    ctx.drawImage(img,col*(w/cols),row*(h/rows),w/cols,h/rows,sx-drawW/2,sy-drawH+8,drawW,drawH);
-  }else{
-    ctx.drawImage(img,sx-drawW/2,sy-drawH+8,drawW,drawH);
+function readyImage(img){return !!(img&&img.ok&&img.complete&&img.naturalWidth);}
+function getFrameCanvas(img,fx,fy,fw,fh,removeBg=true){
+  if(!readyImage(img))return null;
+  let cache=frameCanvasCache.get(img);
+  if(!cache){cache=new Map();frameCanvasCache.set(img,cache);}
+  const key=[Math.round(fx),Math.round(fy),Math.round(fw),Math.round(fh),removeBg?1:0].join(',');
+  if(cache.has(key))return cache.get(key);
+  const source=document.createElement('canvas');
+  source.width=Math.max(1,Math.round(fw));source.height=Math.max(1,Math.round(fh));
+  const sctx=source.getContext('2d');
+  sctx.imageSmoothingEnabled=false;
+  try{sctx.drawImage(img,fx,fy,fw,fh,0,0,source.width,source.height);}catch(e){cache.set(key,null);return null;}
+  if(!removeBg){cache.set(key,source);return source;}
+  let data;
+  try{data=sctx.getImageData(0,0,source.width,source.height);}catch(e){cache.set(key,source);return source;}
+  const d=data.data,w=source.width,h=source.height;
+  const sample=[];
+  const pts=[[0,0],[w-1,0],[0,h-1],[w-1,h-1],[Math.floor(w/2),0],[Math.floor(w/2),h-1],[0,Math.floor(h/2)],[w-1,Math.floor(h/2)]];
+  for(const [x,y] of pts){const i=(y*w+x)*4;sample.push([d[i],d[i+1],d[i+2]]);} 
+  const bg=[0,1,2].map(c=>Math.round(sample.reduce((a,p)=>a+p[c],0)/sample.length));
+  function sat(r,g,b){const mx=Math.max(r,g,b),mn=Math.min(r,g,b);return mx-mn;}
+  function dist(r,g,b){return Math.abs(r-bg[0])+Math.abs(g-bg[1])+Math.abs(b-bg[2]);}
+  let minX=w,minY=h,maxX=-1,maxY=-1;
+  for(let y=0;y<h;y++){
+    for(let x=0;x<w;x++){
+      const i=(y*w+x)*4,r=d[i],g=d[i+1],b=d[i+2];
+      const s=sat(r,g,b),dd=dist(r,g,b);
+      // Removes the dark/grey/pink JPEG background but keeps colorful pixel-art characters.
+      const bgLike=(dd<52&&s<45)||(dd<35)||(s<18&&dd<85)||(Math.abs(r-bg[0])<55&&Math.abs(g-bg[1])<55&&Math.abs(b-bg[2])<55);
+      if(bgLike)d[i+3]=0;
+      else{if(x<minX)minX=x;if(y<minY)minY=y;if(x>maxX)maxX=x;if(y>maxY)maxY=y;}
+    }
   }
+  sctx.putImageData(data,0,0);
+  if(maxX<minX||maxY<minY){cache.set(key,source);return source;}
+  const pad=2;
+  minX=Math.max(0,minX-pad);minY=Math.max(0,minY-pad);maxX=Math.min(w-1,maxX+pad);maxY=Math.min(h-1,maxY+pad);
+  const tw=maxX-minX+1,th=maxY-minY+1;
+  const out=document.createElement('canvas');out.width=tw;out.height=th;
+  const octx=out.getContext('2d');octx.imageSmoothingEnabled=false;octx.drawImage(source,minX,minY,tw,th,0,0,tw,th);
+  cache.set(key,out);return out;
+}
+function drawFrame(img,row,col,rows,cols,cx,cy,maxW,maxH,anchor='bottom',removeBg=true){
+  if(!readyImage(img))return false;
+  rows=Math.max(1,rows||1);cols=Math.max(1,cols||1);
+  row=Math.max(0,Math.min(rows-1,row||0));col=Math.max(0,Math.min(cols-1,col||0));
+  const fw=img.naturalWidth/cols,fh=img.naturalHeight/rows;
+  const frame=getFrameCanvas(img,col*fw,row*fh,fw,fh,removeBg);
+  if(!frame)return false;
+  ctx.imageSmoothingEnabled=false;
+  const scale=Math.min(maxW/frame.width,maxH/frame.height);
+  const dw=Math.max(1,frame.width*scale),dh=Math.max(1,frame.height*scale);
+  const dx=cx-dw/2;
+  const dy=anchor==='center'?cy-dh/2:cy-dh+8;
+  ctx.drawImage(frame,dx,dy,dw,dh);
   ctx.imageSmoothingEnabled=true;
   return true;
 }
@@ -249,41 +318,38 @@ function drawUnitSprite(u,sx,sy){
   const set=assetImages.units[u.type];
   if(!set)return false;
   const img=set[key]||set.attack||set.walk||set.idle;
-  const drawSize=u.type==='catapult'?48:38;
-  // Treat walking/attack/work files as directional sheets. Idle can be a one-pose image or a 4-direction strip.
-  const directional=key!=='idle' || (img&&img.ok&&img.naturalHeight>img.naturalWidth*1.5);
-  return drawSmartImage(img,sx,sy,drawSize,drawSize,{directional,facing:u.facing||'down',state:key,timer:u.animTimer||0});
+  if(!readyImage(img))return false;
+  const cfg=(UNIT_SHEET_CONFIG[u.type]&&UNIT_SHEET_CONFIG[u.type][key])||{rows:1,cols:1,still:true};
+  let row=cfg.preferredRow||0;
+  let col=cfg.preferredCol||0;
+  if(!cfg.still){
+    row=SPRITE_ROWS[u.facing||'down']??0;
+    const speed=key==='walk'?155:125;
+    col=Math.floor((u.animTimer||0)/speed)%cfg.cols;
+  }
+  const drawW=u.type==='catapult'?58:42;
+  const drawH=u.type==='catapult'?58:46;
+  return drawFrame(img,row,col,cfg.rows,cfg.cols,sx,sy,drawW,drawH,'bottom',true);
 }
 function drawBuildingSprite(b,sx,sy){
   const img=assetImages.buildings[b.type];
-  if(!img||!img.ok||!img.complete||!img.naturalWidth)return false;
-  ctx.imageSmoothingEnabled=false;
-  ctx.drawImage(img,sx,sy,b.size,b.size);
-  ctx.imageSmoothingEnabled=true;
-  return true;
+  if(!readyImage(img))return false;
+  return drawFrame(img,0,0,1,1,sx+b.size/2,sy+b.size/2,b.size*1.05,b.size*1.05,'center',true);
 }
 function drawTreeSprite(tile,sx,sy){
   const img=assetImages.tiles.treeStages;
-  if(!img||!img.ok||!img.complete||!img.naturalWidth)return false;
+  if(!readyImage(img))return false;
   let stage=0;
   const r=tile.resource??110;
   if(r<35)stage=2;else if(r<80)stage=1;
-  const cols=3;
-  const fw=img.naturalWidth/cols,fh=img.naturalHeight;
-  ctx.imageSmoothingEnabled=false;
-  ctx.drawImage(img,stage*fw,0,fw,fh,sx-2,sy-9,TILE+4,TILE+12);
-  ctx.imageSmoothingEnabled=true;
-  return true;
+  return drawFrame(img,0,stage,1,3,sx+TILE/2,sy+TILE+4,TILE+12,TILE+22,'bottom',true);
 }
 function drawGoldMineSprite(tx,ty,sx,sy){
   const img=assetImages.tiles.goldMine;
-  if(!img||!img.ok||!img.complete||!img.naturalWidth)return false;
+  if(!readyImage(img))return false;
   const mine=getMineAt(tx,ty);
   if(!mine||mine.tx!==tx||mine.ty!==ty)return false;
-  ctx.imageSmoothingEnabled=false;
-  ctx.drawImage(img,sx,sy,TILE*3,TILE*3);
-  ctx.imageSmoothingEnabled=true;
-  return true;
+  return drawFrame(img,0,0,1,1,sx+TILE*1.5,sy+TILE*1.5,TILE*3.2,TILE*3.2,'center',true);
 }
 
 const TRAINABLE=['grunt','archer','shaman','catapult'];
